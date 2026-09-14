@@ -15,12 +15,17 @@
 
 ```sh
 cd ~/self/wtool
-./bootstrap/install.sh        # 装引擎自己（往 ~/.zshrc / ~/.bashrc 各写一个受管块）
+./install.sh                  # 装引擎自己（等价 bootstrap/install.sh）
+                              # 往 ~/.zshrc / ~/.bashrc 各写一个受管块
 exec zsh                      # 重开 shell，wtool 命令和变量就位
 
 wtool doctor                  # 看当前状态：装了什么、系统是什么
 wtool bootstrap --with-system # 一条命令：把所有项目装完（换源+装包+软链+注入）
 ```
+
+> 根目录的 `install.sh` / `uninstall.sh` / `README.md` / `docs/`
+> 都是 manifest 的 `linkfile` 生成的软链，`repo sync` 会保证它们存在。
+> 只想单独卸掉引擎：`./uninstall.sh`。
 
 ### 全新机器
 
