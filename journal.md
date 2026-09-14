@@ -669,3 +669,26 @@ bootstrap，于是报"找不到 wtool-bootstrap"。
 - 规划阶段就按 when 过滤任务，`--dry-run` 报的条数变准
 - 容器脚本说明 `WTOOL_HEAVY`，跑完打印是否装了重型工具链
 - `doc/06-排错.md` 新增该故障的排查步骤与轻量模式
+
+### 续 14c：用户实测的 Syntax error 是竞态，不是代码 bug
+用户输出末尾 `/wtool/bootstrap/wtool.sh: 634: Syntax error: ";;" unexpected`，
+容器随即退出。
+
+**排查结论：代码没问题。**
+- `dash -n` 逐个检查全部脚本（wtool.sh / lib/*.sh / stub / container-shell /
+  4 个测试）→ 全部通过
+- 历史 4 个版本的 wtool.sh 也全部通过
+- 远端 HEAD 与本地一致
+
+**真实原因：竞态。** 容器的 `-v ~/self/wtool:/wtool:ro` 是 **live mount**，
+而我在用户容器运行期间正在改 `wtool.sh`（python 原地重写），
+容器读到了写到一半的文件。
+
+**纪律**：用户容器在跑的时候，不要改 `~/self/wtool` 下的文件。
+（同理：`repo sync` 跑的时候也别改。）
+
+**顺带确认：用户那次其实是成功的** —— ansible recap `changed=1 failed=0`
+（基础包装上了），6 个项目全部 install 成功；唯一失败的是最后没进成 zsh。
+
+**加固**（bootstrap 已推送）：容器脚本捕获 install/bootstrap 的返回码，
+失败只告警不中止，结尾 zsh 缺失时退回 bash。这样失败也能进 shell 排查。
