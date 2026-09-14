@@ -616,3 +616,38 @@ bootstrap，于是报"找不到 wtool-bootstrap"。
   清单里引用的是 `wtool-fzf-binary` / `wtool-tmux-config`）—— 待用户决定是否删除。
 - `w_manifests` 仍是**私有仓** → VM 里需要 SSH key。
 - `os/ubuntu` 的 provision 需要 `ansible-core`，VM 里要么装它，要么用 `--no-system`。
+
+---
+
+## 2026-09-14 / 会话 1 续 14（容器一键入口）
+
+用户需求：VMware 里跑 repo sync 太费劲，想要**一条 docker 命令**把工具装完，
+然后直接进自己的 zsh 用自己的命令。
+
+### 产出
+1. **`bootstrap/scripts/container-shell.sh`**（新）
+   容器内脚本：装依赖 → 换源 → 装 wtool → `wtool bootstrap` → `exec zsh`
+2. **`wtool bootstrap --install-only`**（引擎新增）
+   跳过换源/装包/编译，只做软链与注入。
+
+### 脚本里内置的踩坑经验
+| 坑 | 处理 |
+|---|---|
+| 先换 HTTPS 源再装 ca-certificates → 证书失败 | 先用 HTTP 装 ca-certificates，再切 HTTPS |
+| 国内直连 archive.ubuntu.com 卡死 | 自动在 ustc/tuna/aliyun/huawei 之间挑；apt 超时 15s 不干等 |
+| 容器里 root 访问宿主目录 → git dubious ownership | `git config --global --add safe.directory '*'` |
+| 只读挂载 → git 想写索引 | 脚本内 `GIT_OPTIONAL_LOCKS=0` |
+| 挂载的是开发副本、可能有未提交改动 | 默认带 `--force` |
+| tmux/ripgrep 没装 → `tmux`、`rscur` 不能用 | 基础依赖里一起装 |
+| ansible 只有全套安装才需要 | 按 `WTOOL_ARGS` 判断是否装 `ansible-core` |
+
+### 本地演练（WTOOL_SKIP_DEPS=1 + 假 HOME + --install-only）
+```
+~/.zshrc 里 6 个 wtool 块：
+  bootstrap shell/oh-my-zsh shell/zsh terminal/fzf terminal/tmux tools/repo
+新 zsh: ZSH=oh-my-zsh  wtool=…/links/bootstrap/bin/wtool
+        cs=1  cw=1  fzf=…/links/terminal/fzf/bin/fzf
+```
+**全部通过**（apt 那一段本地无法验，留给用户在容器里跑）。
+
+已推送 bootstrap（`b8fab1e`）。
