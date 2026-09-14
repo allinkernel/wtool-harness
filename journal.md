@@ -498,3 +498,28 @@ grep -vE '^[dfl] \.cache( |/)'
 `~/.cache` 是 XDG 标准缓存目录，任何程序都可能往里写，不该算在 wtool 的账上。
 
 本地回归：容器脚本 13/13、run_all 27/27 + 24/24。
+
+### 续 11f：容器端到端 ✅ 14/14 全绿
+用户最终实测：
+```
+===== 1. 挑一个可用的【HTTP】国内镜像 =====  使用镜像: http://mirrors.ustc.edu.cn ✓
+  git 起初拒绝访问挂载的仓库 … dubious ownership … 已加 safe.directory=* 修复
+===== 2. HTTPS 源 + deb822 被 apt 正常接受 =====
+===== 3. 6 个项目全部装好 =====
+===== 4. 变量 / 块顺序(5→10→20→40→50→60) / 软链 / zsh / bash / doctor /
+         provision 干跑(识别 ubuntu + 算出换源路径 + ansible 任务) 全部 PASS
+===== 5. 全部卸载后 $HOME 与安装前一致；.bashrc 内容还原 =====
+PASS: 14   FAIL: 0
+```
+
+**这标志着最初的目标成立**：一台干净的 Ubuntu 24.04 上，
+装 6 个项目 → 环境变量/软链/shell 注入全部就位 → 全部卸载后字节级还原。
+
+同时提交了：
+- `bootstrap` cd1e842（自举 + provision 层）
+- `harness`  ea60a5b（项目记忆首次提交）
+- `shell/oh-my-zsh` e1601547（compaudit 说明）
+
+**尚未覆盖**：真正的 fresh 机器引导（apt → 取 repo → repo init/sync →
+wtool bootstrap）。容器测试用的是"只读挂载已有工作区"，跳过了 repo sync。
+这一步需要 `start.sh`，并且依赖 manifest 可访问（当前是私有仓）。
