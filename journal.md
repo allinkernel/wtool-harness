@@ -651,3 +651,21 @@ bootstrap，于是报"找不到 wtool-bootstrap"。
 **全部通过**（apt 那一段本地无法验，留给用户在容器里跑）。
 
 已推送 bootstrap（`b8fab1e`）。
+
+### 续 14b：用户实测卡在 ansible task（已修）
+用户输出停在 `TASK [安装基础软件包] ******`。
+
+**三个原因**：
+1. 一个 task 装 40 个包 → ansible 跑完才输出，中间毫无反馈（看起来就是卡住）
+2. 没设 `DEBIAN_FRONTEND` → 无人值守环境里 debconf 提问会挂死 apt
+3. 重型工具链（clang/llvm/emacs + multilib，1GB+）拖慢每一次安装，且与
+   "让 shell 能跑起来"无关
+
+**修法**（bootstrap `c8724f4` / os/ubuntu `6a787f5` 已推送）：
+- `packages.yaml` 拆成 7 个 task + `environment: DEBIAN_FRONTEND: noninteractive`
+- 新增 `toolchain.yaml`（重型），由 `when="os:ubuntu,env:WTOOL_HEAVY"` 控制，默认不装
+- 引擎：`when` 新增 `env:NAME` 支持（规划器 + shell 双侧）；
+  任务环境注入 `DEBIAN_FRONTEND=noninteractive`
+- 规划阶段就按 when 过滤任务，`--dry-run` 报的条数变准
+- 容器脚本说明 `WTOOL_HEAVY`，跑完打印是否装了重型工具链
+- `doc/06-排错.md` 新增该故障的排查步骤与轻量模式
