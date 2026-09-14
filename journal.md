@@ -523,3 +523,44 @@ PASS: 14   FAIL: 0
 **尚未覆盖**：真正的 fresh 机器引导（apt → 取 repo → repo init/sync →
 wtool bootstrap）。容器测试用的是"只读挂载已有工作区"，跳过了 repo sync。
 这一步需要 `start.sh`，并且依赖 manifest 可访问（当前是私有仓）。
+
+---
+
+## 2026-09-14 / 会话 1 续 12（用户要"我能看的文档"）
+
+### 用户提出的两点
+1. **清单仓没配好**：GitHub 上还没有对应的仓 —— 这是他要做的第一件事。
+   （实测更正：`allinkernel/w_manifests` **已存在但私有**，`wblog`/`wtool` 两分支
+   都指向 `036aa0f`，内容还是**博客清单**；wtool 清单只在本地未提交。）
+2. **"你改了一堆仓库，我完全无感知"** —— 需要一份给人看的指导：
+   wtool 怎么用、怎么管理每个项目的安装、架构是什么。
+   要求：文档直白地放在 wtool 目录下（用软链从 harness 引出），
+   让任何人 clone 下来就能靠它掌握全部操作。
+
+### 产出：`harness/doc/` 8 篇 + 根目录三个软链
+```
+~/self/wtool/README.md  -> harness/doc/README.md
+~/self/wtool/docs       -> harness/doc
+~/self/wtool/install.sh -> bootstrap/install.sh
+```
+
+| 文档 | 解决什么 |
+|---|---|
+| `README.md` | 入口：30 秒上手 + 三个核心概念 |
+| `01-架构与原理.md` | 三层结构、数据流、稳定地址、受管块、取舍表 |
+| `02-快速开始.md` | 新机器（依赖顺序！）、docker 验证、日常操作 |
+| `03-命令速查.md` | 全部命令 + 参数 + 环境变量 |
+| `04-项目清单与变更导读.md` | **每个仓我改了什么**（逐条对照 mytool）+ 自己核对的方法 |
+| `05-写一个新项目.md` | wtool.xml 人话版 + 四种形态 + 命名/优先级约定 |
+| `06-排错.md` | 按报错查（含 repo 事故的恢复方法） |
+| `07-清单仓待办.md` | 清单仓现状 + 完整待办 + 可直接用的 default.xml 草稿 |
+
+### 澄清 `harness/` 内部的分工（写进 `harness/README.md`）
+- `doc/` 回答"**我该怎么做**"（给人）
+- `notes/` 回答"**为什么这么设计**"（决策/坑/上下文）
+- `journal.md` 回答"**当时发生了什么**"（流水）
+- `skill/` 给 agent 自动加载
+
+### 顺带确认
+`bootstrap` 与 `harness` 的分支已由用户改名到 `main`，与其余 6 个仓统一了
+（原先的 master/main 不一致会导致 `repo sync` 报 could not find refs/heads/main）。

@@ -1,37 +1,72 @@
-# harness —— wtool 项目的"外部记忆"
+# harness —— wtool 的项目记忆
 
-这个目录**不是**代码，是给**任何 agent**（DSH / Gemini / 人）读的项目记忆。
-目的：换一个 agent、换一台机器，读这里就能掌握项目全貌并接着干活。
+这个目录**不是代码**，是整套东西的知识库：设计为什么这么定、踩过哪些坑、
+发生过什么、怎么用。
 
-## 怎么读（建议顺序）
+从 wtool 根目录看，它通过软链暴露出来：
 
-| 顺序 | 文件 | 读它你会得到 |
-|---|---|---|
-| 1 | `skill/wtool/SKILL.md` | 可执行的技能卡片：项目是什么、禁区是什么、怎么验证 |
-| 2 | `notes/01-context.md` | 仓库清单、两套 checkout 的现状、GitHub 上已有什么 |
-| 3 | `notes/02-decisions.md` | 所有关键设计决策 + 被否决的方案 + 理由 |
-| 4 | `notes/03-hazards.md` | **禁区**：哪些操作绝对不能做 |
-| 5 | `notes/04-bootstrap.md` | 引擎现状（细节在 `bootstrap/docs/`） |
-| 6 | `notes/05-next.md` | 下一步待办 |
-| 7 | `journal.md` | 按时间追加的操作流水（谁做了什么、验证结果） |
+```
+~/self/wtool/README.md  →  harness/doc/README.md     （入口，任何人 clone 下来先看这个）
+~/self/wtool/docs/      →  harness/doc/               （全部用户文档）
+```
 
-## 约定
+---
 
-1. **每轮对话/每次操作结束都要在 `journal.md` 追加一条**，包含：时间、操作、命令、结果、遗留问题。
-2. 新的设计决策写进 `notes/02-decisions.md`（编号递增，ADR 风格：背景 → 决策 → 理由 → 被否决的方案）。
-3. 新的坑/禁区写进 `notes/03-hazards.md`。
-4. 代码的真相在 `bootstrap/docs/spec.md`；这里只记**为什么**和**历史**。
-5. 本目录和 `bootstrap/` 都是 git 仓库，但**由用户自己提交**，agent 不要执行任何 git 写操作（见 `notes/03-hazards.md`）。
+## 四类内容，分别给谁看
+
+| 目录 | 给谁看 | 是什么 | 什么时候看 |
+|---|---|---|---|
+| **`doc/`** | **人**（包括未来的你） | 用户手册：怎么装、怎么用、怎么加新项目 | **第一次接触，从这里开始** |
+| `notes/` | 人 / agent | 决策记录（ADR）、坑与禁区、项目上下文、待办 | 想改设计、想知道"为什么这么做"时 |
+| `journal.md` | agent / 考据 | 按时间追加的操作流水：谁做了什么、验证结果 | 想知道"某个改动是怎么来的" |
+| `skill/` | AI agent | 可执行的技能卡片（铁律、命令、改代码规矩） | agent 接手任务时自动加载 |
+
+**一句话区分**：
+`doc/` 回答"**我该怎么做**"，`notes/` 回答"**为什么这么设计**"，
+`journal.md` 回答"**当时发生了什么**"。
+
+---
+
+## doc/ —— 用户文档（8 篇）
+
+| 文件 | 内容 |
+|---|---|
+| `README.md` | 入口：这是什么、30 秒上手、三个核心概念 |
+| `01-架构与原理.md` | 三层结构、一次 install 的数据流、稳定地址、受管块、为什么这么设计 |
+| `02-快速开始.md` | 新机器从零（**依赖顺序很关键**）、docker 验证、日常操作、跑测试 |
+| `03-命令速查.md` | 全部命令 + 参数 + 环境变量一览 |
+| `04-项目清单与变更导读.md` | 每个仓是什么 + **迁移时具体改了什么**（可逐条核对） |
+| `05-写一个新项目.md` | `wtool.xml` 人话版、四种项目形态、命名与优先级约定 |
+| `06-排错.md` | 按报错查处理办法（含两条血的教训） |
+| `07-清单仓待办.md` | 清单仓现状 + 完整待办 + 可直接用的 `default.xml` 草稿 |
+
+---
+
+## notes/ —— 决策与坑
+
+| 文件 | 内容 |
+|---|---|
+| `01-context.md` | 两套集合（mytool / wtool）的对比、资产盘点、GitHub 与 `$HOME` 现状 |
+| `02-decisions.md` | 12 条 ADR：背景 → 决策 → 理由 → **被否决的方案** |
+| `03-hazards.md` | 禁区、仓库层的坑、引擎实现的坑、上游工具陷阱、<br>**G 节：两次误伤 repo client 的事故与恢复方法** |
+| `04-bootstrap.md` | 引擎现状：文件与规模、已实现/未实现、状态目录布局 |
+| `05-next.md` | 待办与建议的下一步 |
+
+---
+
+## 约定（写给未来的 agent）
+
+1. **每轮对话/每次操作结束，在 `journal.md` 追加一条**：时间、做了什么、命令、结果、遗留。
+2. 新的设计决策 → `notes/02-decisions.md`（编号递增，ADR 风格）。
+3. 新的坑/禁区 → `notes/03-hazards.md`；如果它影响用户操作，**同时补进 `doc/06-排错.md`**。
+4. 用户可见的行为变化 → 更新 `doc/` 里对应那篇。
+5. 代码的真相在 `bootstrap/docs/spec.md`；`harness/` 只记**为什么**和**历史**。
 
 ## 关于 skill 的加载
 
-技能卡片在 `harness/skill/wtool/SKILL.md`。DSH 的技能发现路径不包含 `harness/`，
-所以两种加载方式：
+技能卡片在 `skill/wtool/SKILL.md`。DSH 的技能发现路径不包含 `harness/`，两种用法：
 
 ```sh
-# 方式一：直接读
-cat harness/skill/wtool/SKILL.md
-
-# 方式二：软链到 DSH 会发现的位置（可选，用户自己决定）
-ln -s "$PWD/harness/skill/wtool" "$PWD/skills/wtool"
+cat harness/skill/wtool/SKILL.md          # 直接读
+ln -s "$PWD/harness/skill/wtool" "$PWD/skills/wtool"   # 软链到 DSH 会发现的位置（可选）
 ```
