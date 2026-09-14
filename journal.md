@@ -564,3 +564,55 @@ wtool bootstrap）。容器测试用的是"只读挂载已有工作区"，跳过
 ### 顺带确认
 `bootstrap` 与 `harness` 的分支已由用户改名到 `main`，与其余 6 个仓统一了
 （原先的 master/main 不一致会导致 `repo sync` 报 could not find refs/heads/main）。
+
+---
+
+## 2026-09-14 / 会话 1 续 13（推 GitHub + VM 前的完整验证）
+
+### 用户授权并完成的事
+1. 用 `gh`（账号 allinkernel，token 有 repo 权限）建了 **10 个 public 空仓**并推送
+2. 清单仓提交并推送（`w_manifests` 的 `wtool` 分支）
+3. 最终清单：8 个自有项目 + 2 个原有项目，并补了 4 个 linkfile
+
+| path | GitHub 仓 | 分支 | 状态 |
+|---|---|---|---|
+| bootstrap | wtool-bootstrap | main | ✓ 已推 |
+| harness | wtool-harness | main | ✓ 已推 |
+| os/ubuntu | wtool-os-ubuntu | main | ✓ 已推 |
+| editor/vim/astronvim_v5_config | wtool-astronvim_v5_config | (原有) | 未动 |
+| shell/oh-my-zsh | wtool-ohmyzsh | main | ✓ 已推 |
+| shell/zsh | wtool-zsh | main | ✓ 已推 |
+| terminal/fzf | wtool-fzf-binary | main | ✓ 已推 |
+| terminal/tmux | wtool-tmux-config | main | ✓ 已推 |
+| tools/repo | wtool-repo | main | ✓ 已推 |
+| themes/typora/lightmind | typora-LightMindTheme | (原有) | 未动 |
+
+核对方式：`git ls-remote` 的远端 main 与本地 HEAD **逐个比对，8/8 一致**。
+
+### ⚠️ 发现并修掉一个真 bug：存根被软链调用时失效
+manifest 的 linkfile 在根目录生成了 `install.sh -> bootstrap/install.sh` 软链。
+存根原来用 `dirname "$0"` 定位自己 → 软链场景下 `here` 变成**仓库根目录**而不是
+bootstrap，于是报"找不到 wtool-bootstrap"。
+
+修法：存根先解析软链（`while [ -L "$self" ]` 循环 readlink）再取目录。
+已同步到 **7 个有存根的项目**并推送。
+
+### 本地完整验证（复现 VM 流程）
+用本地 bare 镜像 + 手写含 linkfile 的清单，真实跑 `repo init` → `repo sync`：
+```
+根目录:  README.md -> harness/doc/README.md
+         docs -> harness/doc （8 篇）
+         install.sh -> bootstrap/install.sh
+         uninstall.sh -> bootstrap/uninstall.sh
+① ./install.sh      ✓  写了 1 个 rc 块 + 1 条中转链接
+② ./uninstall.sh    ✓  完全回退（$HOME 与安装前一致）
+③ 根目录文档可读     ✓  README 首行 + 8 篇 doc
+```
+
+### 未做 / 待办
+- **真实 GitHub 下载测试没跑完**：用户在大陆网络，agent 沙箱走不了他的代理，
+  `repo sync` 太慢，用户决定跳过（该测试留给他自己在 VMware 做）。
+- **两个多余的仓**：`wtool-fzf`、`wtool-tmux`（在用户定名之前我建的，
+  清单里引用的是 `wtool-fzf-binary` / `wtool-tmux-config`）—— 待用户决定是否删除。
+- `w_manifests` 仍是**私有仓** → VM 里需要 SSH key。
+- `os/ubuntu` 的 provision 需要 `ansible-core`，VM 里要么装它，要么用 `--no-system`。
