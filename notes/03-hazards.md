@@ -78,3 +78,78 @@ apt-get install -y --no-install-recommends ca-certificates git python3
 
 **推论**：wtool 的 `start.sh`（todo.md 第 0 条）第一步必须是这条裸 apt；
 引擎依赖 `python3`，而最小化系统上它不一定在。
+
+## G. ⚠️ 事故记录（2026-09-14）：误在用户工作区跑了 repo init
+
+**事故**：写一个 E2E 测试时，变量 `t`（临时目录）为空，导致
+
+```sh
+cd "$t/work"                       # → cd "/work" 失败
+~/bin/repo init -u "file://$t/manifest" -b main   # → URL 变成 file:///manifest
+```
+
+命令在**当前工作目录**（也就是 `~/self/wtool` 这个 repo client）里执行了，
+把用户的 repo client 重新 init 了一遍。
+
+**实际损害（2 处）**：
+1. `.repo/repo` 被 `reset --hard` 到 `v2.9^0`（2020 年的老版本，`help.py` 里
+   `from formatter import ...` 在 Python 3.10+ 已删除）→ **repo 命令直接不可用**。
+2. `.repo/manifests.git` 的 `remote.origin.url` 被改成 `file:///manifest`。
+
+**未受损**：`.repo/manifests/default.xml`（用户自己的改动）、`.repo/manifest.xml`、
+所有项目仓。
+
+**恢复方法**：
+```sh
+# 1) 从 reflog 找到被我改之前的提交
+git -C ~/self/wtool/.repo/repo reflog | head
+#    HEAD@{1} = 6d2260b  ← 用户 fork 的 wsw 分支 tip
+git -C ~/self/wtool/.repo/repo reset --hard 6d2260b
+
+# 2) 还原 manifest 仓的 remote（原 URL 保存在 syncstate 里，没丢）
+git -C ~/self/wtool/.repo/manifests.git config --get repo.syncstate.remote.origin.url
+git -C ~/self/wtool/.repo/manifests.git config remote.origin.url \
+    'ssh://git@github.com/allinkernel/w_manifests.git'
+```
+
+**防复发纪律（今后必须遵守）**：
+1. **`repo init` 绝不能在"当前目录"裸跑**。必须先 `cd` 到专用目录，
+   并**断言** `[ "$(pwd)" = "$expected" ]`，否则中止。
+2. **测试目录放在工作区内**（如 `~/self/wtool/.e2e-test/`），不要放 `/tmp`——
+   agent 的 bash 调用之间 `/tmp` **不保留**（每次调用是新的挂载命名空间），
+   跨调用引用 `/tmp` 路径必然踩空。
+3. 变量用在路径里之前先检查非空：`[ -n "$t" ] || exit 1`。
+4. 涉及 repo 的破坏性实验，先在 **manifest 仓的副本**上做，不要碰真 client。
+
+### G.2 第二次事故（同日）：测试目录放在工作区内部
+
+修完 G 节后重做 E2E，把测试目录放在 `~/self/wtool/.e2e-work/` —— **仍然中招**。原因：
+
+> **repo 会从当前目录向上逐级查找 `.repo`**，一旦找到就"复用那个 client"
+> （日志原话：`repo: reusing existing repo client checkout in /home/mindul/self/wtool`）。
+
+于是 `repo init` 又作用到了用户的 client 上：`.repo/manifests` 的 HEAD 变成
+unborn、`refs/heads/default` 被清掉、`remote.origin.url` 又被改成临时路径。
+（`default.xml` 因为 git 拒绝覆盖未提交改动而**幸免**。）
+
+**恢复**：`origin/wtool` 与 `packed-refs` 里还留着 `036aa0f`，所以
+```sh
+git -C .repo/manifests.git update-ref refs/heads/default 036aa0f
+git -C .repo/manifests.git config remote.origin.url 'ssh://git@github.com/allinkernel/w_manifests.git'
+git -C .repo/manifests.git update-ref -d refs/remotes/origin/main   # 删掉泄漏进来的
+git -C .repo/manifests reset -q 036aa0f                            # 索引回位，工作区不动
+```
+
+**新增纪律（最重要的一条）**：
+> **绝不在任何 repo client 的目录树内部运行 `repo` 命令。**
+> 测试工作目录必须用 `mktemp -d`（`/tmp` 下没有 `.repo` 祖先），
+> 且整个测试要在**同一次进程**里跑完（agent 的 `/tmp` 不跨调用保留）。
+
+`tests/e2e_repo_sync_test.sh` 里已加**硬性安全闸**：WORK 若在工作区内、
+或其任一祖先存在 `.repo`，直接拒绝执行。
+
+### G.3 顺带发现：分支名不一致
+`bootstrap` 与 `harness` 在 **`master`**，其余 6 个仓在 **`main`**，
+而清单的 `<default revision="main"/>`。把它们加进真清单时，
+`repo sync` 会报 `couldn't find remote ref refs/heads/main`。
+（E2E 测试里已改成按各仓真实分支生成 revision。）
