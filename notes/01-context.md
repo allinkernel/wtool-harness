@@ -1,71 +1,145 @@
 # 01 项目全貌与现状
 
-> 快照时间：2026-09-09 / 2026-09-10 会话。任何 agent 接手前先看这里。
+> 接手前先看这一篇。它讲**现在**是什么样，不讲历史。
+> 历史决策看 `02-decisions.md`，踩过的坑看 `03-hazards.md`，下一步看 `05-next.md`。
+>
+> 快照：2026-09-15 会话末。
 
-## 1. 两套集合
+---
 
-| | `~/source/mytool`（旧） | `~/self/wtool`（新） |
+## 一句话
+
+`wtool` 是一个**脚本调用器 + 状态管理者**：把一堆个人配置和工具拆成独立的小项目，
+每个项目只声明"我有什么""我要做什么"，由 wtool 负责安装、构建、发布，以及**精确撤销**。
+
+## 代码结构（每层只讲一件事）
+
+```
+wtool/                              工作区（repo 客户端，名字随安装位置变）
+├── bootstrap/                      引擎。改行为来这儿，其他目录都是数据
+│   ├── wtool.sh                    命令分发 + 各命令实现（唯一入口）
+│   ├── lib/wtool_plan.py           Python 侧：只算不写（解析清单、算差异、渲染）
+│   ├── lib/wtool_fs.sh             Shell 侧：只写不算（软链、原子写、journal）
+│   ├── lib/wtool_os.sh             系统探测
+│   ├── scripts/                    引擎自己的动作脚本
+│   │   ├── install.sh              自举引擎 + 装整个工作区（也是"没 git clone"的入口）
+│   │   ├── uninstall.sh            反向
+│   │   └── container-shell.sh      一条命令进容器开发环境
+│   ├── templates/                  wtool init 用的模板（.tpl 后缀）
+│   ├── tests/                      5 组测试，136 条断言
+│   └── docs/                       spec.md / manifest-schema.md / roadmap.md
+├── wtool-base/                     用户文档。只有文档，没有工具
+│   ├── README.md                   总览 / 没 git clone 怎么装 / 怎么用
+│   └── guide.md                    结构 / 命令 / 子项目索引
+├── harness/                        你正在看的：给 AI 助手的项目记忆
+├── os/ shell/ terminal/ editor/ themes/    各具体项目
+└── .wtool/                         安装痕迹（在 $HOME 里，不在仓库里）
+```
+
+**分层原则**：`bootstrap/` 是唯一有行为的地方；其他项目要么是纯数据（配置文件 + 声明），
+要么带 `scripts/`。文档分两处 —— `wtool-base/` 给人看，`harness/` 给助手看。
+**两者不要互相掺**：用户文档里不写本地路径和内部实现，harness 里不写教程。
+
+## 核心契约（改代码前必须理解的三条）
+
+### 1. 声明式是默认，脚本是例外
+
+| 动作 | 默认（声明式） | 例外（脚本） |
 |---|---|---|
-| 管理方式 | `repo`，清单仓 `gitee.com:mindulmindul/wsw_manifests`（分支 `ubuntu_20`/`blog`） | `repo`，清单仓 `ssh://git@github.com/allinkernel/w_manifests.git`（分支 `wtool`） |
-| 远端 | 全部 gitee | 全部 github（ssh） |
-| 部署方式 | 复制 / `install_all.sh` 递归调用各子项目 `wsw_install.sh` | **纯软链 + 受管块**（本次重构的核心变化） |
-| 环境变量 | `WSW_REPO_TOP`，根目录软链 `source_all_env.sh` / `install_all.sh` | `WTOOL_*`，引擎在 bootstrap，项目只放声明 |
-| 规模 | 7 个项目，~700MB（多为上游 checkout） | 目前 2 个项目 + bootstrap + harness |
+| install | `wtool.xml` 的 `<link>` / `<env>` | `scripts/install.sh` |
+| download | `scripts/release.json` 存在即可下载 | `scripts/download.sh` |
+| build | —— 构建没有声明式的可能 | `scripts/build.sh` |
+| publish | `<publish kind="source">` 打源码包 | `scripts/publish.sh` |
 
-## 2. mytool 资产盘点（迁移依据）
+**表格里"能不能做"就是查这张表**：左栏有就是引擎的通用能力，右栏有就是项目自带脚本。
 
-| mytool 项目 | 体积 | 内容 | 迁移目标 |
-|---|---|---|---|
-| `start` | 56K | `.init/{start,source_all_env,install_all}.sh` + zsh/proxy/node 安装器 | → `bootstrap`（已被新引擎取代） |
-| `os` | 60K | ustc/tuna × 5 个 Ubuntu 版本 sources.list + apt 批量安装 | → `os/ubuntu`，**需要 provision + system scope** |
-| `zsh/wsw-zshrc` | 4 文件 | `wsw.zsh` + env/install | ✅ **已迁移为 `shell/zsh`** |
-| `zsh/oh-my-zsh` | 13M | vendored 的 oh-my-zsh 副本（个人 fork） | ✅ **已迁移为 `shell/oh-my-zsh`**（独立 wtool 项目） |
-| `nvim/wsw_nvim` | 小 | `wsw_configs/wsw_nvim/*.lua` + 源码编译 neovim | → `editor/nvim`，**需要 provision（编译）** |
-| `tmux` | 32K | tmux.conf + cpu/mem/disk/net 脚本 | ✅ **已迁移为 `terminal/tmux`** |
-| `fzf` | 4.3M | 4.4MB 二进制入库 + 补全脚本 | ✅ **已迁移为 `terminal/fzf`**（多 shell 示例） |
-| `android` | 456K | `my_repo.py` + 一大套 zsh 函数（cs/ct/cnp/cnn/cdd/gb/gbb/rs/rscur/wninja） | ✅ **已迁移为 `tools/repo`**（纯 env） |
-| 未跟踪垃圾 | 11M | `wsw-configs.tar.gz`、`nvim/nvim-important.tar.gz` | 不迁移，删除 |
+### 2. install 和 provision 分开，理由不是"可逆性"
 
-> 迁移进度（2026-09-10）：**8 个 mytool 项目已迁 5 个**。剩余 `start`(→bootstrap 已覆盖)、`os`、`nvim` 需要 provision/system scope 能力后才能迁。
+`uninstall` 实际能撤的东西（见 `$WTOOL_STATE/<id>/journal.tsv`）：软链、rc 块、
+它创建的空目录、改过的系统文件（从备份还原）、克隆的源码树。
 
-## 3. 当前 wtool checkout 内容
+**apt 装的包没有记账，撤不回来** —— 不是"不可逆"，是"**没记**"。对外文档必须这么说，
+不要说成"provision 不可逆"。
+
+那为什么还分两条命令？三个理由，都和可逆性无关：
+
+- **权限**：install 永远不需要 root，provision 需要。混在一起，`wtool install foo`
+  会在某一刻突然问你要 sudo
+- **失败爆炸半径**：install 失败，journal 里每条都在，能精确收拾；provision 失败
+  （dpkg 半配置、apt 锁残留），系统处于引擎推理不了的状态
+- **幂等成本**：install 秒级可随便重跑，provision 分钟级
+
+### 3. 产物契约：脚本要声明"我产出了什么"
 
 ```
-~/self/wtool/
-├── .repo/                       repo client（清单仓 w_manifests@wtool）
-├── bootstrap/                   ★ 引擎（git 仓，用户提交）
-├── harness/                     ★ 本项目记忆（git 仓，用户提交）
-├── shell/oh-my-zsh/             ★ 迁移（prio 10，独立项目）
-├── shell/zsh/                   ★ 迁移（prio 20，纯 env）
-├── tools/repo/                  ★ 迁移（prio 40，纯 env）
-├── terminal/tmux/               ★ 迁移（prio 50，env + link）
-├── terminal/fzf/                ★ 迁移（prio 60，env zsh + env bash）
-├── editor/vim/astronvim_v5_config/    repo 管理的项目
-├── themes/typora/lightmind/           repo 管理的项目
-├── astronvim_v5/                空目录（残留）
-├── typora-theme/                手工克隆残留（与 themes/typora/lightmind 重复）
-└── .mypy_cache/                 残留
+$WTOOL_STATE/<项目 id>/
+├── meta.tsv         项目元信息（priority / project_root / head / installed_at）
+├── journal.tsv      "当前该撤销什么"，uninstall 逆着做，**永不截断**
+├── actions.tsv      "做过什么"的时间线（build / download），只追加，不参与回滚
+├── artifacts.tsv    当前磁盘上的产物是谁产出的（build 还是 download）
+├── env.zsh/.bashrc  这个项目的环境变量块（汇总进 ~/.wtool/.zshrc）
+└── provisioned/     provision 任务的幂等 marker
 ```
 
-## 4. GitHub 上已有的东西（allinkernel）
+**journal 和 actions 是两件事，别混。** 前者描述"该撤销什么"，后者是时间线。
 
-| 仓库 | 状态 |
+**`build.sh` 和 `download.sh` 必须把产物放到同样的路径** —— 这是
+`wtool build X && wtool install X` 与 `wtool download X && wtool install X`
+等价的前提。脚本通过 `$WTOOL_ARTIFACTS` 拿到清单文件路径，往里追加
+`kind<TAB>相对$HOME的路径<TAB>来源<TAB>时间`。
+
+## 环境变量汇总（rc 收敛）
+
+用户 rc 里**只有一段** loader 块，指向 `~/.wtool/.zshrc` / `~/.wtool/.bashrc`；
+那两份文件由 wtool **整份生成**（按 priority 拼接各项目的 `env.<shell>` 块）。
+
+好处：wtool 不再需要在**用户的文件**里做排序插入；删掉那一个块就能彻底去掉影响。
+每次 install/uninstall 后由 `wt_env_sync` 全量重算，所以不会堆积，早期散落的
+`# >>> wtool:<id>` 块会被自动清掉（迁移路径）。
+
+## 表格的四种状态
+
+```
+│ editor/astronvim_v5  │ 70 │ 可执行 │ 不支持 │ 待构建下载 │ 待构建下载 │
+```
+
+- **不支持**（红）—— 没这项能力
+- **可执行**（黄）—— 现在就能跑
+- **待构建下载**（蓝）—— 能力有，但要先 build 或 download
+- **已完成**（绿）—— 跑过了
+
+流水线：`build 或 download → install → publish`，后面的依赖前面的。
+`kind="source"` 的 publish 没有前置依赖（它打的就是源码）。
+
+**四个命令都不自动串联**：前置没做时 install/publish 直接报错告诉你去跑哪条。
+`wtool bootstrap` 只装"不需要决策"的那部分，剩下的列成命令清单交给用户。
+
+## 当前状态（截至 2026-09-15）
+
+已完成：
+
+- rc 收敛、`scripts/` 迁移、`wtool download`、`all` 参数、构建门槛、
+  表格四态 + 表框、`wtool init`、bootstrap 只装能装的
+- 8 个项目的 release 已发布（source 包），`wtool-base/README.md` 的下载块自动生成
+- 5 组测试共 136 条全过
+
+**没做**（详见 `05-next.md`）：
+
+- `release_mgr.py` + `scripts/release.json`（download 的整套机制）
+- 四目标矩阵（ubuntu 20.04 / 22.04 / 24.04 / 26.04，按 glibc 选包）
+- `astronvim_v5` 的发布包（要跑一次容器构建，小时级）
+- `原理.md` / `install.md`；`wtool-base` 文档同步
+- **`generated.tsv`（脏检查豁免）必须最先做** —— 否则 publish 改完
+  `release.json` / README 会把下一次 publish 堵死（已经踩过一次）
+
+## 权威数据在哪
+
+| 想知道 | 看 |
 |---|---|
-| `w_manifests` | 分支 `wblog` 与 `wtool` **指向同一个 commit `036aa0f`**，内容仍是博客清单；wtool 清单改动只在工作区（未提交）⚠️ |
-| `wtool-git-repo` | 用户 fork 的 git-repo，`wsw` 分支加了 `repo manifest -R`（并行查远端锁版本） |
-| `wtool` | 只有一个 LICENSE（占位） |
-| `wtool-astronvim_v5_config` | 已在用 |
-| `typora-LightMindTheme` | 已在用（fork） |
-| `wblog-*` | 博客项目，与 wtool 无关 |
-
-mytool 的 7 个 `wsw_*` 仓在 github 上**都不存在**（已逐个 `ls-remote` 验证），迁移时需要新建 + `git push --mirror`。
-
-## 5. 本机 $HOME 现状（与设计相关的部分）
-
-| 项 | 现状 | 影响 |
-|---|---|---|
-| `~/.zshrc` | 1311 字节，第 1 行是 `source /home/mindul/source/mytool/source_all_env.sh`；含明文 `GEMINI_API_KEY` | ① 绝不能把 `~/.zshrc` 软链进公开仓 ② 迁移就是把这一行换成 wtool 块 |
-| `~/.zshenv` | **不存在** | 若将来想用 `ZDOTDIR` 接管，成本是"新建一个文件"，不改任何现有文件 |
-| `~/.config/astronvim_v5` | 完整克隆（带自己的 `.git`） | 正是"两份都要改"的根源，应改为软链 |
-| `~/.wswtool` | 已存在 → `~/source/mytool` | todo.md 里的想法已落地；wtool 侧对应 `~/.wtool/links/<id>` |
-| stow / chezmoi 等 | 均未安装；apt 里 `stow` 是 2.3.1 | 目前方案零外部依赖 |
+| 引擎有哪些命令、怎么用 | `bootstrap/wtool.sh --help`（文件头注释） |
+| 接口契约、不变量 | `bootstrap/docs/spec.md` |
+| `wtool.xml` 能写什么 | `bootstrap/docs/manifest-schema.md` |
+| 当前项目表 | `python3 bootstrap/lib/wtool_plan.py publish-list --root .` |
+| 踩过哪些坑 | `03-hazards.md` |
+| 为什么这么设计 | `02-decisions.md` |
+| 测试怎么跑 | `bootstrap/tests/run_all.sh` |
