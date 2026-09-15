@@ -4,7 +4,15 @@
 
 ---
 
-## 0. `generated.tsv` —— 脏检查豁免（**最先做**）
+## 0. `generated.tsv` —— 脏检查豁免 ✅ **已完成（2026-09-15）**
+
+> 实现：`wt_atomic_write`（唯一的写文件入口）里统一登记到
+> `$WTOOL_STATE/generated.tsv`；`wt_git_dirty` 把 `git status --porcelain`
+> 减去登记过的文件。`cmd_publish` 改用它，被拒时打印真实改动的前几行。
+> 已测两种情形：只有 wtool 写过的文件变了 → 放行；用户手改了别的 → 拒绝。
+>
+> 下面留原文，讲清楚它当初为什么必须最先做。
+
 
 **问题**：`wtool publish` 会改写受版本控制的文件（`scripts/release.json`、
 `scripts/pre_release.json`、`wtool-base/README.md` 的下载块）。改完这些文件就"脏"了，
@@ -104,6 +112,8 @@ install 的"实际"就是现成的 `journal.tsv`。
 
 - 镜像已验：`ubuntu:20.04` focal glibc 2.31 / `22.04` jammy 2.35 / `24.04` noble 2.39 /
   `26.04` resolute 2.43（**rhel9 已放弃**，单独做）
+- ⚠️ **代理很慢**：容器里 `apt-get install` 走宿主的 7897 代理约 171 kB/s，
+  装一次构建依赖要十几分钟。这不是卡住，是慢 —— 别误判成死锁
 - `publish.sh` 支持 `--targets=ubuntu-24.04,ubuntu-22.04`，支持中断后续跑
 - 构建时间：一次 astronvim 构建 40–90 分钟，串行四轮 3–6 小时。**并行不了** ——
   24G 内存同时跑两个容器就到顶
