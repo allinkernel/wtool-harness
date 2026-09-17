@@ -692,3 +692,68 @@ bootstrap，于是报"找不到 wtool-bootstrap"。
 
 **加固**（bootstrap 已推送）：容器脚本捕获 install/bootstrap 的返回码，
 失败只告警不中止，结尾 zsh 缺失时退回 bash。这样失败也能进 shell 排查。
+
+---
+
+## 2026-09-15 ~ 09-17 / 会话 1 续 15（Phase 0/1 重构 → 发布链路 → 安装器与容器）
+
+> 这一段当时没写流水，事后按 `bootstrap` 的 git log 补记 —— **只写 commit 里查得到证据的**。
+
+### 09-15：Phase 0/1 + publish + 表格
+
+- `59016ee` Phase 0：rc 收敛（用户 rc 里只留一个 loader 块）、`scripts/` 约定、
+  `wtool download`、`all` 参数、构建门槛
+- `606bac7` / `c7ba44c` Phase 1：动作脚本迁进 `<项目>/scripts/`，
+  build / install / publish 各管一摊 → 存根方案作废（ADR-013）
+- `970fa38` `wtool publish` 三条分支（源码包 / 项目 `publish.sh` / 声明为不发布）
+- `ff0d8b0` 表格改流水线语义 + 文字标签 + 表框；`26dab4b` 加 `--color`
+- `a76cf45` / `7bc0395` / `1cbfc0d` / `5c68bd6` / `a6f057d`：解压出来的工作区
+  （没有 `.git`、没有 repo 客户端）也要能看全项目表、认发布标记、补根目录入口；
+  相对软链被 `tar --transform` 改写成断链（修法：加 `S`）
+- `c5e6182` 第三方仓保护从来没生效过（`set -e` 下 `x=$(失败命令)` 静默退出）
+- `24bf6e2` `generated.tsv`：wtool 自己写的文件，publish 脏检查豁免
+  —— `05-next.md` 的第 0 条，做完
+
+### 09-16：真实发布暴露的问题 + 20.04 容器
+
+- `ad3d24a` 上传失败不再毁掉产物（trap 不再无脑 `rm -rf`）、失败真的非零退出；
+  `wt_publish_gh_upload` 从 `|| wt_die` 改成返回非零
+- `e73f0fd` `publish.sh` 失败那条路径也计入 `_failed`
+- `c5e33b8` publish 开始前用 `gh api /rate_limit` 探一次路，不再每个文件都赌
+- `e0a2950` "零产物发布会洗掉下载表"：`gh` 查询失败被当成"事实就是空的"，
+  把 `wtool-base/README.md` 里 30 条真实链接刷成了"还没有发布过任何项目"；
+  顺手加 `docs refresh` / `refresh-downloads`，让这段逻辑能单独测
+- `c521118` container-shell 在 20.04 上的三个坑：代号写死 noble、
+  deb822 源与一行式 `.list` 冲突（apt 彻底瘫痪）、ansible 包名逐版本试、
+  `grep -c ... || echo 0` 输出两行
+
+### 09-17：install.sh 重构 + uninstall 钩子 + 容器网络
+
+- `ef586b9` uninstall 先跑项目自己的 `install.sh --uninstall`，再逆放 journal
+  （实测 astronvim `plan-uninstall` 出 `actions: 0`，"装完撤不回来"）
+- `abe3d8d` `container-raw.sh`：什么都不装，等价"刚 `repo sync` 完"
+- `365f210` `install.sh` 重构成"只让 wtool 能用"的四步 + 发行版 profile
+  （`install-env.sh` + `install-ubuntu{20,22,24,26}.sh`）；修掉 sudo 写死、
+  ansible 包名写死、`safe.directory` 顺序、第 3 步吞输出
+- `5a3133d` `container-proxy.sh` 自动接宿主代理；**顺带纠正**
+  "代理对 GitHub 是坏的"这个错误结论（一次临时故障被过度概括）
+- `b99d5e3` 进容器不给提示符：`/dev/tcp` 探测在当前 shell 里开 fd 污染了终端状态，
+  改成独立子进程探 + 进 shell 前显式交接说明
+
+### 09-17 文档审计（本次会话）
+
+对着 `wtool.sh --help`、`spec.md`、代码和 git log 把 `harness/` 全部文档核了一遍：
+测试条数 146→147、`01-context` 的结构树/契约表/状态目录/当前状态、
+`04-bootstrap` 整篇（原来还是 09-09 的）、`05-next` 逐条对齐、
+`SKILL.md` 的命令与项目清单、`README.md` 目录表。
+`03-hazards` 的 H 节已由 `71b4b0d` 补完，本轮只核对没重复。
+发现的两处**仓外**文档问题（`container-shell.sh` 指向已删除的
+`harness/doc/06-排错.md`；`wtool-base/README.md` 让人跑不存在的
+`./bootstrap/install.sh`）记在 `05-next.md` 第 8 节 —— 那两个仓库这次没动。
+
+### 验证
+
+- `bootstrap/tests/run_all.sh` 5 组 147 条全绿
+  （pairing 30 / provision 24 / publish 41 / table 35 / release-copy 17）
+- `editor/astronvim_v5/tests/astronvim_test.sh` 52 条全绿
+- `wtool table` 12 个项目；`publish-list` 12 行

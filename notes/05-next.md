@@ -1,6 +1,9 @@
 # 05 下一步
 
 > 按顺序做。第 0 步不做完，后面每一步都会把下一次 publish 堵死。
+>
+> 最后对齐现实：2026-09-17（对着 `bootstrap` 的代码和 git log 核过一遍：
+> 做完的标 ✅，没做的保留，部分做的写清"做到哪了"）。
 
 ---
 
@@ -29,9 +32,16 @@
 
 ---
 
-## 1. `release_mgr.py` + `scripts/release.json`（download 的整套机制）
+## 1. `release_mgr.py` + `scripts/release.json`（download 的整套机制）—— **未做**
 
 ### 已定的设计
+
+**现状（2026-09-17）**：`bootstrap/lib/` 里**没有** `release_mgr.py`，
+仓库里也一个 `release.json` / `pre_release.json` 都没有。
+所以现在能 `download` 的只有自带 `scripts/download.sh` 的项目（目前只有
+`editor/astronvim_v5`）；`wtool download` 对别的项目只会说"没有 scripts/download.sh，
+这个项目只能自己编"。引擎里唯一认 `scripts/release.json` 的地方是
+`cmd_bootstrap` 的就绪判断（见了就不要求先 build/download）—— 那是给这套机制预留的钩子。
 
 - **`release_mgr.py` 住引擎**（`bootstrap/lib/`），静态工具。`publish.sh` 和 `download.sh`
   都要用它，每个项目各带一份 = N 份实现。
@@ -65,7 +75,7 @@
 
 ---
 
-## 2. pre / post 两份记录 + 两个 diff
+## 2. pre / post 两份记录 + 两个 diff —— **未做**
 
 | 记录 | 放哪 | 含义 |
 |---|---|---|
@@ -84,7 +94,7 @@ install 的"实际"就是现成的 `journal.tsv`。
 
 ---
 
-## 3. 同名 commit 重发的处理
+## 3. 同名 commit 重发的处理 —— **未做**（依赖第 1/2 条的 `release.json`）
 
 准备发布时先比对 `release.json` 里记的 commit 和当前 HEAD：
 
@@ -94,7 +104,7 @@ install 的"实际"就是现成的 `journal.tsv`。
 
 ---
 
-## 4. `wtool docs sync`
+## 4. `wtool docs sync` —— **部分完成**
 
 扫全仓找带 `<!-- >>> wtool:downloads >>>` 标记的 Markdown 文件，用 **release.json 的数据**
 （不再是 GitHub API，离线可用且和 download.sh 同一源头）重写标记之间的内容。
@@ -103,8 +113,13 @@ install 的"实际"就是现成的 `journal.tsv`。
 - 支持**多个块各管各的**：标记带参数，如 `wtool:downloads project=astronvim_v5`
 - 提成显式命令 `wtool docs sync`，`wtool publish` 结尾自动调
 
-现状：机制已经有了（`wtool_plan.py` 的 `render_downloads` / `splice_block`），
-要换数据源 + 支持参数。
+**现状（2026-09-17）**：机制已经有了（`wtool_plan.py` 的 `render_downloads` / `splice_block`），
+也已经有 CLI 入口 —— 但名字不是 `docs sync`，而是
+`wtool docs refresh`（`wtool refresh-downloads` 等价，`wtool docs` 不带参数也会刷新），
+而且**这两个都不在 `--help` 里**。
+数据源仍是 `gh` 查 GitHub（不是 `release.json`），标记也**不支持参数**（只有一个全局块）。
+要做的是：换数据源 + 参数化多块 + 把命令名字和 `--help` 统一。
+（顺带：`refresh-downloads` 是在 `e0a2950` 里为了能单独测"空结果不许洗掉下载表"才加出来的。）
 
 ---
 
@@ -114,19 +129,30 @@ install 的"实际"就是现成的 `journal.tsv`。
   `26.04` resolute 2.43（**rhel9 已放弃**，单独做）
 - ⚠️ **代理很慢**：容器里 `apt-get install` 走宿主的 7897 代理约 171 kB/s，
   装一次构建依赖要十几分钟。这不是卡住，是慢 —— 别误判成死锁
-- `publish.sh` 支持 `--targets=ubuntu-24.04,ubuntu-22.04`，支持中断后续跑
+- `publish.sh` **一次只做一个目标**：`--target=ubuntu-24.04`（单数）。
+  矩阵写在 `wtool.xml` 的 `<publish><target .../>` 里（现在声明了
+  focal / noble / jammy 三个），脚本从清单读，读不到才用内置的两个。
+  **没有** `--targets=a,b` 这种一次多发的写法；也**没有"中断后续跑"** ——
+  每次都是新容器，断了要重跑（`--keep` 只是保留容器方便事后排查）。
+  断点续传只在下载侧（`download.sh` 的 `curl -C -`，按分卷保留）
 - 构建时间：一次 astronvim 构建 40–90 分钟，串行四轮 3–6 小时。**并行不了** ——
   24G 内存同时跑两个容器就到顶
 - 20.04 编出来的包在四个版本上都能跑，所以它最通用；另外三个是"原生环境 + 新工具链"。
   风险：focal 上某些 mason 包可能已经没有对应构建
 - 容器必须 `--network=host`：宿主代理是 `http://127.0.0.1:7897`，
   而**容器里的 127.0.0.1 是容器自己**，直接透传 proxy 变量所有下载都会失败
+  （`publish.sh` 会看代理变量自动切到 host 网络；容器脚本另有 `container-proxy.sh`
+  自动探测，见 `AGENTS.md`）
 
 ---
 
-## 6. 文档
+## 6. 文档 —— **wtool-base 部分未做；harness 部分本轮做了**
 
-### `wtool-base/`（给人看，**必须让所有人看懂**）
+### `wtool-base/`（给人看，**必须让所有人看懂**）—— **未做**
+
+现状：`wtool-base/` 里只有 `README.md` / `guide.md` / `wtool.xml` / `LICENSE`，
+**没有 `install.md`，也没有 `原理.md`**。README 里那个下载块是 wtool 自动生成的，
+块**外面**还留着一段手写说明，而且已经过期（见下面第 8 节）。
 
 - **不要出现本地路径**（`~/self/wtool` 这种），别人没有你的上下文
 - **不要莫名其妙冒出一个名词**，概念第一次出现就要解释
@@ -137,7 +163,7 @@ install 的"实际"就是现成的 `journal.tsv`。
 - 同步本轮所有变化：rc 收敛、`scripts/` 目录、四种状态、`all`、`wtool download`、
   `wtool init`、install/provision 的真实区别
 
-### `原理.md`（用户要求新增）
+### `原理.md`（用户要求新增）—— **未做**
 
 讲清楚**每个命令的原理**，不限于：
 - 为什么配置文件只放软链、系统里不留副本
@@ -147,15 +173,18 @@ install 的"实际"就是现成的 `journal.tsv`。
 - 产物契约（build 和 download 必须同路径）
 - 发布流水线（pre/post 记录、commit 绑定、按 glibc 选包）
 
-### `harness/`（给助手看）
+### `harness/`（给助手看）—— ✅ **2026-09-17 这轮做完**
 
-- 本轮已重写 `01-context.md`（全貌 + 三条核心契约 + 当前状态）
-- `03-hazards.md` 要补本轮新踩的坑（见下）
-- `02-decisions.md` 要补本轮的设计取舍
+- `01-context.md`：结构树、契约表、状态目录、表格语义、当前状态都对着代码更新了
+- `02-decisions.md`：补了 ADR-013 ~ ADR-018（含 ADR-010 被取代的说明）
+- `03-hazards.md`：补了 H1 ~ H13（`71b4b0d`）
 
 ---
 
-## 7. 本轮新踩的坑（要补进 03-hazards.md）
+## 7. 本轮新踩的坑（要补进 03-hazards.md）—— ✅ **已完成（`71b4b0d`）**
+
+已经全部进 `03-hazards.md` 的 H 节（H1–H13，另外补了 `$!`/`set -u`、
+"别把一次失败当规律"两条）。下面这份清单保留作索引：
 
 1. **`tar --transform` 会连符号链接的指向一起改写** → 包里的相对软链全变断链。
    加 `S` 标志。`tar -tf` 看不出来，只有真解压去读才暴露
@@ -176,3 +205,28 @@ install 的"实际"就是现成的 `journal.tsv`。
 11. **改工作区时容器正挂着它**：脚本正被逐行读取，改一半会炸。先停容器再改
 12. **约 6 次尝试都没测出 nvim `-j32` 的真实内存**：死在代理上
     （archive/security.ubuntu.com 502、GitHub TLS 中断），不是我该反复重试的事
+
+---
+
+## 8. 顺手要修的文档问题（都在 `harness/` 之外，别混进这个仓库的提交）
+
+1. **`bootstrap/scripts/container-shell.sh:18`** 的注释写着
+   "见 harness/doc/06-排错.md"，而 `harness/doc/` 整个目录在 `cebe7c9`
+   （2026-09-15，"删掉用户文档，只留 agent 需要的东西"）里被删了。
+   要么把注释改成指 `harness/notes/03-hazards.md` / `wtool-base/guide.md`，
+   要么把那份排错文档找回来。
+2. **`wtool-base/README.md`** 下载块**下面**的手写段落让人跑
+   `./bootstrap/install.sh` —— 这个路径在 `scripts/` 迁移后不存在了
+   （`bootstrap/` 下没有 `install.sh`）。现在应该是根目录入口 `./install.sh`，
+   或者 `bootstrap/scripts/install.sh`。这段在自动生成的
+   `wtool:downloads` 标记**之外**，`wtool docs refresh` 刷不到它，只能手改。
+3. **`bootstrap/docs/spec.md` §2**（约 46–59 行）还在说 `templates/stub.sh`、
+   `scaffold`，CLI 列表也只写到 install/uninstall/list/status/doctor/scaffold/validate。
+   实际是 `templates/*.tpl`、命令叫 `init`（`scaffold` 只是告警别名），
+   另外有 build/download/provision/publish/bootstrap/table/env。
+   spec.md 是**权威契约**（按"契约优先"的规矩），要改得改它本身，
+   不能只在 harness 里记一笔。
+4. **`wtool uninstall` 没有 `--no-script`**（代码小缺口）：`cmd_uninstall`
+   判断的是环境变量 `WTOOL_NO_SCRIPT=1`，而没有任何地方 export 它
+   （`--no-script` 只被 `cmd_install` 认，且只存进局部变量）。
+   要么给 uninstall 也加上这个参数，要么把这个判断删掉 —— 见 ADR-015 的括号。

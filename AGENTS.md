@@ -53,10 +53,18 @@
 
 ## 改完代码必须做的
 
+（下面两条都从**工作区根目录**开始跑）
+
 ```bash
-cd bootstrap/tests && ./run_all.sh          # 5 组，146 条，应该全绿
+cd bootstrap/tests && ./run_all.sh          # 5 组，147 条，应该全绿
+                                            # pairing 30 / provision 24 / publish 41 / table 35 / release-copy 17
 cd editor/astronvim_v5 && ./tests/astronvim_test.sh   # 52 条
 ```
+
+改完 shell 至少 `sh -n` 一遍，但**别把 `sh -n` 当成"能跑"**：
+三元运算符这类 bashism 能过语法检查、在 dash 下运行时才炸（见 `notes/03-hazards.md` H11）。
+`tests/` 下另外两个脚本不在 `run_all.sh` 里：`container_test.sh` 要 docker，
+`e2e_repo_sync_test.sh` 慢（用本地裸仓真跑 repo sync），人工按需跑。
 
 **容器相关的测试只能人工跑**（跑不了 docker 里那套完整流程时，
 至少要人工确认两个容器脚本没被改坏）：
@@ -102,6 +110,10 @@ docker run --rm -it --network=host -v ~/self/wtool:/wtool:ro \
 | `install.sh` | `bootstrap/scripts/install.sh` | 装 wtool **自己**。**不装任何项目**，做完就停 |
 | `uninstall.sh` | `bootstrap/scripts/uninstall.sh` | 卸 wtool 自己 |
 | `README.md` / `guide.md` | `wtool-base/` | 用户文档 |
+| `AGENTS.md` | `harness/AGENTS.md` | 就是本文件（助手必读） |
+
+这些软链由 manifest 的 `<linkfile>` 建；**从发布包解压出来的工作区没有 repo 客户端**，
+所以 `install.sh` 的第 2 步会自己补一遍（见下）。
 
 **根目录的 `install.sh` 和项目的 `scripts/install.sh` 是两码事**，
 这个混淆已经害过一次（改项目脚本时以为在改引擎）。
@@ -166,12 +178,13 @@ docker run --rm -it --network=host -v ~/self/wtool:/wtool:ro \
 **文件存在即能力声明**：`wtool_plan.py` 就是按 `scripts/<名字>` 在不在
 来填表格那几列的。所以"新建一个空的 build.sh"会立刻让表格显示"可执行"。
 
-### 容器脚本（两个，别搞混）
+### 容器脚本（两个入口 + 一个被 source 的库）
 
 | 脚本 | 状态 |
 |---|---|
 | `container-shell.sh` | 装依赖 → 装引擎 → `wtool bootstrap` → 进 zsh。**一步到位** |
 | `container-raw.sh` | **什么都不装**，只挂工作区 → 进 bash。等价于"刚 `repo sync` 完" |
+| `container-proxy.sh` | 不是入口，被上面两个 source：探一次宿主代理并接上（见「代理」一节） |
 
 `container-raw.sh` 刻意不装 python3 —— 装了 `wtool` 就能跑，
 而真机器刚同步完时本来就没有。**测试"从零走一遍"必须用这个**，

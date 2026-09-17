@@ -145,6 +145,9 @@ $HOME/.tmux.conf -> $HOME/.wtool/links/terminal/tmux/tmux.conf -> 仓库真实�
 
 **否决**：项目里写完整逻辑（ADR-003 已否决）。
 
+> 后续：这套"存根"方案已经作废，见 **ADR-013**（动作脚本统一住 `scripts/`，
+> 存根全部删除）。这里保留原文，讲清楚当初为什么这么做。
+
 ---
 
 ## ADR-011 git 检查：要"干净"，但不要"分支"
@@ -171,3 +174,146 @@ $HOME/.tmux.conf -> $HOME/.wtool/links/terminal/tmux/tmux.conf -> 仓库真实�
 **理由**：能同时验证软链、rc 块、优先级、uninstall 配对，且改动风险低。
 
 **注意**：`bin/disk.sh` 的管道子 shell bug **故意保留未修**，避免混入行为变更。
+
+---
+
+## ADR-013 动作脚本统一住 `scripts/`，项目存根作废（取代 ADR-010）
+
+**背景**：ADR-010 让每个项目放 `install.sh` / `uninstall.sh` 存根（同一模板的副本），
+靠文件名判断子命令。同名 `.sh` 到处都是，改错层"看起来生效了"但实际没跑（已经害过一次）。
+而且引擎后来改成"`wtool install` 会跑项目自己的 `install.sh`"——存根里再调
+`wtool install` 就成了无限递归。
+
+**决策**：
+- 一个项目的能力**由 `scripts/<动作>.sh` 在不在声明**（build / download / install / publish）；
+  项目根的老位置仍然认，但引擎会警告"应该挪到 `scripts/` 下"。
+- 所有存根删除；需要自定义安装的项目才提供 `scripts/install.sh`。
+- 项目不需要 `uninstall.sh`：卸载钩子是同一个 `scripts/install.sh --uninstall`。
+- `wtool init --all` 从 `templates/*.tpl` 生成 `scripts/` 下的模板。
+
+**理由**：一个项目目录里最多只有一个 `install.sh`，不会再和根目录入口、引擎脚本混淆；
+"文件存在即能力声明"让表格的格子有唯一判据（`pipeline_states()` 只看文件在不在）。
+
+**证据**：`606bac7`（动作脚本迁进 `scripts/`）、`c7ba44c`（职责重构）、
+`cf79722`（存根时代的最后一个补丁：让存根被软链调用时也能找到引擎）；
+`cmd_install` 里的注释写着"存根已经全部删除"。
+
+**否决**：保留存根（递归风险 + 混淆）。
+
+---
+
+## ADR-014 `install.sh` 只装 wtool 自己：四步 + 发行版 profile 派发
+
+**背景**：老的 `install.sh` 既装系统环境、又自举引擎、还顺手把整个工作区装掉。
+用户看到一屏输出，失败时分不清是系统环境的问题还是某个项目的问题。
+
+**决策**：拆成四步，做完就停：
+```
+0 准备运行环境（探测发行版 → 派发给 install-<发行版><主版本>.sh）
+1 自举引擎到 ~/.wtool/bootstrap
+2 建工作区入口软链
+3 wtool install <引擎自己> --force   ← 让 wtool 进 PATH
+```
+发行版差异组织成：`install-env.sh`（共用逻辑）+ 每个发行版一个小文件
+（只声明 `ENV_NAME` / `ENV_ANSIBLE` / `ENV_EXTRA_PKGS` 并调 `env_prepare`）。
+被引擎调用时（`WTOOL_PROJECT_ID` 已设）**只自举、立即退出**，不能往下跑第 0 步。
+
+**理由**：两件事失败原因不同（系统环境 vs 项目自身），分开用户才知道该修哪一头；
+加新发行版 = 加一个小文件；第 3 步的输出绝不能吞（静默失败比报错更坏）。
+
+**证据**：`365f210`。
+
+**否决**：继续"一条命令装完"（用户明确要求拆开）。
+
+---
+
+## ADR-015 uninstall 先跑项目钩子，再逆放 journal
+
+**背景**：install 会跑项目自己的 `install.sh`，uninstall 却只逆放引擎的 journal ——
+项目脚本装的东西（编译产物、下载的包、铺到 `$HOME` 的配置）不在那本 journal 里。
+实测 astronvim_v5：`wtool uninstall` 跑得"成功"，`plan-uninstall` 出来 `actions: 0`，
+东西一个没少（用户报的"装完撤不回来"）。
+
+**决策**：`wtool uninstall` 的步骤固定为
+**项目 `install.sh --uninstall`（存在才跑）→ rc 回退 → plan 里其余动作 → 逆序重放 journal
+→ 重算 env 汇总 → 清状态目录**。钩子失败默认 `die`，要 `--force` 才继续。
+（`cmd_uninstall` 里判断的是环境变量 `WTOOL_NO_SCRIPT=1`；`--no-script` 那个 CLI 参数
+目前只有 `install` 认 —— 想跳过卸载钩子得自己 `WTOOL_NO_SCRIPT=1 wtool uninstall ...`。）
+
+**理由**：顺序不能反 —— 项目脚本删的是实体（大件），引擎删的是软链和状态；
+软链先没了，项目脚本可能就找不到自己装的东西。卸载没干净比装失败更危险：
+后者看得见，前者是"以为清干净了"。
+
+**证据**：`ef586b9`。
+
+**否决**：uninstall 只信 journal；钩子失败继续往下走。
+
+---
+
+## ADR-016 分卷大小按"网络可靠性窗口"定（默认 32M），失败保产物
+
+**背景**：实测直连上传只有 ~237 KB/s，链路每隔几分钟断一次。314M / 576M 的单次 POST
+注定完不成，重试就是从头再来。同时 `cmd_publish` 的 trap 无条件删临时目录，
+而半小时才编出来的产物就在里面；上传函数还是 `|| wt_die`，调用点根本轮不到判断：
+**传失败连产物一起没，还退出 0。**
+
+**决策**：
+- 分卷默认 `VOLUME_SIZE=32M`（每个约 2 分钟），值记进 `dist.json`；
+  下载侧不看这个值，它照 `dist.json` 的 `volumes` 清单（名字 + 字节数 + sha256）
+  逐个下，所以两边天然一致。
+- `wt_publish_gh_upload` **返回非零而不是 die**；调用方决定处置。
+- `cmd_publish` 用 `_failed` 计数，有项目没发出去就**非零退出**；
+  失败时 `_keep_scratch=1` 保留产物并打印补传命令。
+- 上传前用 `gh api /rate_limit` **探一次路**（选代理或直连走到底），
+  中途失效再换另一条试一次。
+
+**理由**：卷大小不是随便定的，它要和网络的可靠性窗口匹配；
+退出码是调用方（脚本、CI、后台任务）唯一的信号，报"成功"比报错更坏。
+
+**证据**：`ad3d24a`、`e73f0fd`、`c5e33b8`；分卷默认值在
+`editor/astronvim_v5/scripts/publish.sh`（`VOLUME_SIZE=${VOLUME_SIZE:-32M}`）。
+
+**否决**：一个整包（断了从头再来）；上传失败即 die（产物一起毁、退出码还是 0）。
+
+---
+
+## ADR-017 容器网络：自动探测宿主代理，不让人去猜
+
+**背景**：`docker run` **不会**把宿主 shell 的环境变量带进容器（除非显式 `-e`）。
+于是宿主 `curl` 什么都通、容器里全失败，人很容易归因成"网络坏了""GitHub 连不上"，
+去查完全错误的方向。
+
+**决策**：新增 `container-proxy.sh`，两个容器脚本都 source：
+1. 容器里已有代理变量（`-e` 传进来的）→ 直接用，不干预；
+2. 没有 → 探一次宿主代理（默认 `127.0.0.1:7897`，依赖 `--network=host`），
+   通了就设上大小写四个变量 + `no_proxy=127.0.0.1,localhost`，并**明确说出来**；
+3. 都没有 → 说清后果并给出该加的 `-e` 参数。
+可关：`WTOOL_NO_PROXY=1`；换端口：`-e WTOOL_HOST_PROXY=...`。
+**探测必须在独立子进程里做**（`timeout 3 bash -c 'exec 3<>/dev/tcp/...'`）——
+在当前 shell 里开 fd 会让之后 `exec bash -i` 不给提示符，看起来和卡死一模一样。
+
+**理由**：这种"环境差异"最贵的不是失败本身，是它把人引到错误的方向；
+另外"卡住"和"在等你输入"必须能区分开。
+
+**证据**：`5a3133d`、`b99d5e3`（提示符那条）。
+
+**否决**：默认直连（容器里全失败）；无条件透传 `HTTP_PROXY`（`127.0.0.1` 在容器里是容器自己）。
+
+---
+
+## ADR-018 生成物登记表 `generated.tsv`：脏检查豁免
+
+**背景**：`wtool publish` 会改写受版本控制的文件（文档里的下载块，以后的
+`release.json` / `pre_release.json`）。改完这些文件就"脏"了，**下一轮 publish
+会以"有未提交改动"拒绝这个项目** —— 一次发布把下一次发布堵死。
+最初只对 README 做了一个文件名的特判。
+
+**决策**：`wt_atomic_write`（唯一的写文件入口）统一登记到
+`$WTOOL_STATE/generated.tsv`（路径 / 项目 / 时间）；
+`wt_git_dirty` 把 `git status --porcelain` 减去登记过的文件，剩下的才算真脏。
+`cmd_publish` 用它，被拒时打印真实改动的前几行。
+
+**理由**：生成物只会越来越多（`release.json`、下载块……），逐文件特判堆不下去，
+也分不清"这是 wtool 写的"还是"用户改的"；只豁免 wtool 自己写过的，用户手改照样算脏。
+
+**证据**：`24bf6e2`。"连续跑两次 publish，第二次不能报有未提交改动"已经验证。

@@ -35,35 +35,53 @@ description: Use when working in /home/mindul/self/wtool (the wtool tool collect
 
 ```
 wtool-bootstrap/          引擎
-  wtool.sh                CLI: install/uninstall/provision/bootstrap/list/status/doctor/env/scaffold/validate
+  wtool.sh                CLI: build/download/install/uninstall/provision/publish/
+                               bootstrap/table/list/status/doctor/env/init/validate/version
   lib/wtool_plan.py       规划器（只写 scratch）
   lib/wtool_fs.sh         执行器（唯一写 $HOME 的地方）
-  templates/stub.sh       项目存根模板
-  tests/pairing_test.sh   20 条断言，全在临时 $HOME 里跑
+  templates/*.tpl         wtool init 生成 scripts/ 用的模板（stub.sh 已废，见 ADR-013）
+  tests/                  7 个 *_test.sh；run_all.sh 跑 5 组 147 条，全在临时 $HOME 里跑
 
 <项目>/
-  wtool.xml               声明：env / link / priority
+  wtool.xml               声明：env / link / priority / publish
   env.zsh                 被 source 的部分（只导出，无副作用）
-  install.sh uninstall.sh 存根（模板副本，勿手改）
+  scripts/                动作脚本：build.sh / download.sh / install.sh / publish.sh
+                          **文件存在即能力声明**（根目录老位置引擎仍认，但会警告）
 
 $WTOOL_STATE/  (~/.local/state/wtool)
-  registry.tsv            dest -> 项目 id
+  registry.tsv            dest -> 项目 id / kind
+  generated.tsv           wtool 自己写过的文件（publish 脏检查豁免）
   <id>/journal.tsv        撤销的唯一依据（按 (action,dest) 去重，永不截断）
   <id>/meta.tsv           版本/来源/时间
+  <id>/actions.tsv        做过什么（build / download，只追加）
+  <id>/artifacts.tsv      当前产物来自 build 还是 download
+  <id>/publish.tsv        本地发布历史
 ```
 
-## 已迁移的项目（5 个，均带 git 历史）
+## 项目清单（12 个，2026-09-17）
 
-| 路径 | id | prio | 形态 | 来源仓 |
-|---|---|---|---|---|
-| `shell/oh-my-zsh` | shell/oh-my-zsh | 10 | env | wsw-ohmyzsh |
-| `shell/zsh` | shell/zsh | 20 | env | wsw-zshrc |
-| `tools/repo` | tools/repo | 40 | env | wsw-androidrc |
-| `terminal/tmux` | terminal/tmux | 50 | env + link | wsw_tmux |
-| `terminal/fzf` | terminal/fzf | 60 | env(zsh) + env(bash) | wsw-fzf-static |
-| `os/ubuntu` | os/ubuntu | 5 | system-file + provision(ansible) | wsw_os_config |
+`python3 bootstrap/lib/wtool_plan.py publish-list --root .` 是权威列表：
 
-未迁移：`nvim`（需要 provision 编译，引擎已支持 `<source>`+`wsw.sh`，等建仓）。
+| 路径 | id | prio | 形态 |
+|---|---|---|---|
+| `bootstrap` | bootstrap | 5 | 引擎自己（install 让 `wtool` 进 PATH） |
+| `os/ubuntu` | os/ubuntu | 5 | system-file + provision(ansible) |
+| `shell/oh-my-zsh` | shell/oh-my-zsh | 10 | env |
+| `shell/zsh` | shell/zsh | 20 | env |
+| `tools/repo` | tools/repo | 40 | env |
+| `tools/android_repack` | tools/android_repack | 45 | `scripts/install.sh`（装到 `$WTOOL_PREFIX/bin`） |
+| `terminal/tmux` | terminal/tmux | 50 | env + link |
+| `terminal/fzf` | terminal/fzf | 60 | env(zsh) + env(bash) |
+| `editor/astronvim_v5` | editor/astronvim_v5 | 70 | publish kind="script"；子树 config/nvim 由它 `<sub>` 声明 |
+| `harness` | harness | 100 | 只可发布（给助手的记忆） |
+| `themes/typora/lightmind` | lightmind | 100 | 只可发布（Typora 主题） |
+| `wtool-base` | wtool-base | 100 | 只可发布（用户文档） |
+
+已发布 source 包的有 10 个（见 `wtool-base/README.md` 的下载块）；
+`editor/astronvim_v5` 还是"待构建下载"（要容器构建，小时级）；
+`tools/android_repack` 有发布能力但还没发过。
+上游 `nvim`（neovim/neovim）在 astronvim_v5 的 wtool.xml 里声明为 `kind="none"` ——
+我们既没权限推它，也不能往它里面塞 wtool.xml。
 
 ## provision 层（不可逆操作，与 install 分离）
 
@@ -100,12 +118,14 @@ git commit                    # 迁移改动作为新提交叠在历史之上
 
 ```sh
 cd ~/self/wtool/bootstrap
-./tests/run_all.sh                      # 必须全绿再交付（27 + 24）
+./tests/run_all.sh                      # 必须全绿再交付（5 组 147 条）
 ./wtool.sh doctor
+./wtool.sh table --verbose              # 项目表 + 每个项目"装过没/发布过没"
 ./wtool.sh install   ../terminal/tmux --dry-run
 ./wtool.sh list
 python3 -m py_compile lib/wtool_plan.py # 改 py 后
-sh -n wtool.sh && sh -n lib/wtool_fs.sh # 改 sh 后
+sh -n wtool.sh && sh -n lib/wtool_fs.sh # 改 sh 后（只查语法：bashism 它查不出来，见 H11）
+cd ../editor/astronvim_v5 && ./tests/astronvim_test.sh   # 52 条
 ```
 
 ## 改代码的规矩
@@ -129,13 +149,26 @@ sh -n wtool.sh && sh -n lib/wtool_fs.sh # 改 sh 后
 - `git status --porcelain` 不加 `-uno` → nvim 生成的 data/state 会让安装永远失败。
 - 写 rc 文件用 `mv` 覆盖 → 会毁掉软链。必须 `readlink -f` 后写穿。
 - 块插入用"append" → 安装顺序会影响结果。必须按 `(prio,id)` 排序插入。
+- 在当前 shell 里做 `/dev/tcp` 的 fd 操作 → 之后 `exec bash -i` 不给提示符，看起来就是卡死。
+  探测要放独立子进程（`timeout 3 bash -c ...`）。
+- `grep -c 'x' || echo 0` → 查不到时 grep 自己也输出 0，变成两行。用 `awk 'END{print NR}'`。
+- `docker cp` 不创建中间目录 → 先 `mkdir -p` 目标父目录，否则一条产物都收不到。
+- apt 默认没有下载超时 → 连接停滞时一直挂着等，重试/换源逻辑永远轮不到执行。
+  要显式设 `Acquire::http::Timeout` / `Acquire::https::Timeout`，把"挂死"变成"失败"。
+- `sh -n` 过得去不等于能跑：三元运算符是 bash 扩展，dash 下**运行时**才报错。
+
+完整清单在 `harness/notes/03-hazards.md`（H1–H13，每条都有当时的症状和怎么发现的）。
 
 ## 验证要求
 
 任何改动后至少跑：
 
 ```sh
-./bootstrap/tests/run_all.sh   # 期望 pairing 27/27 + provision 24/24
+./bootstrap/tests/run_all.sh   # 期望 5 组全绿：pairing 30 / provision 24 /
+                               # publish 41 / table 35 / release-copy 17 = 147 条
+cd editor/astronvim_v5 && ./tests/astronvim_test.sh   # 52 条
 ```
 
 并连续跑 3 次确认不 flaky（历史上出现过时间戳导致的间歇性失败）。
+`run_all.sh` **不跑** `container_test.sh`（要 docker）和 `e2e_repo_sync_test.sh`（慢），
+涉及容器/同步逻辑时人工跑；涉及 shell 的改动别只靠 `sh -n`（H11：三元等 bashism 能过语法检查）。
