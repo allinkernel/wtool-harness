@@ -99,12 +99,45 @@ docker run --rm -it --network=host -v ~/self/wtool:/wtool:ro \
 
 | 根目录 | 指向 | 作用 |
 |---|---|---|
-| `install.sh` | `bootstrap/scripts/install.sh` | 装 wtool **自己**（自举 `~/.wtool/bootstrap` + 建工作区入口）。**不装任何项目** |
+| `install.sh` | `bootstrap/scripts/install.sh` | 装 wtool **自己**。**不装任何项目**，做完就停 |
 | `uninstall.sh` | `bootstrap/scripts/uninstall.sh` | 卸 wtool 自己 |
 | `README.md` / `guide.md` | `wtool-base/` | 用户文档 |
 
 **根目录的 `install.sh` 和项目的 `scripts/install.sh` 是两码事**，
 这个混淆已经害过一次（改项目脚本时以为在改引擎）。
+
+### `install.sh` 的四步（2026-09-17 重构）
+
+用户明确要求：**它只负责让 `wtool` 这条命令能用，做完就停**，
+把"装项目"交给 `wtool bootstrap`。理由：两件事的失败原因完全不同
+（系统环境 vs 某个项目），混在一条命令里用户分不清该修哪一头。
+
+```
+第 0 步  准备运行环境  ← 探测发行版，派发给 install-<发行版><版本>.sh
+第 1 步  自举引擎到 ~/.wtool/bootstrap
+第 2 步  建工作区入口软链（install.sh / uninstall.sh / README.md / guide.md）
+第 3 步  wtool install <引擎自己> --force   ← 让 wtool 出现在 PATH 里，到此为止
+```
+
+**发行版的差异这样组织**（加新发行版 = 加一个小文件）：
+
+| 文件 | 内容 |
+|---|---|
+| `scripts/install-env.sh` | 共用逻辑：装包、挑源、git ownership、复查依赖 |
+| `scripts/install-ubuntu20.sh` | 只写不一样的地方：`ENV_NAME` + `ENV_ANSIBLE="ansible"` |
+| `scripts/install-ubuntu22/24/26.sh` | 同上，`ENV_ANSIBLE="ansible-core ansible"` |
+
+`install.sh` 先 source `install-env.sh`（提供函数），再 source 选中的 profile
+（只声明变量并调 `env_prepare`）。**profile 里不重复写装包逻辑。**
+
+三件必须记住的事（都踩过）：
+- **`ENV_ANSIBLE` 要按候选名依次试**：`ansible-core` 是 22.04 才有的包名，
+  focal 上只有 `ansible`。写死一个名字 = 另一版本上 "Unable to locate package"
+- **`git safe.directory` 必须在 git 装完之后设**：`container-raw.sh` 里
+  曾经在 git 还不存在时设它，命令静默失败，用户后面照样撞 dubious ownership
+- **第 3 步的输出绝不能吞**：这里原来是 `>/dev/null 2>&1`，
+  install 因为工作区有改动而拒绝时用户看到一片安静 ——
+  一个可能静默失败的安装步骤比会报错的更坏
 
 ### 第二层：引擎
 
@@ -144,8 +177,9 @@ docker run --rm -it --network=host -v ~/self/wtool:/wtool:ro \
 而真机器刚同步完时本来就没有。**测试"从零走一遍"必须用这个**，
 用 `container-shell.sh` 测会把要验证的前提条件提前满足掉。
 
-两者都只做一件预设：`git config --global --add safe.directory '*'`
-（容器里是 root、仓库属主是宿主用户，不配 git 直接拒绝工作）。
+`container-raw.sh` **不设** `safe.directory` —— 它进去时 git 还没装，
+设了也是静默失败（踩过）。它把这条命令放进"第 0 步"让用户跟着 git 一起装，
+`install.sh` 则在自己的第 0 步里（装完 git 之后）自动设好。
 
 ---
 
