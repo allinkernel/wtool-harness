@@ -88,6 +88,37 @@ $WTOOL_STATE/<项目 id>/
 等价的前提。脚本通过 `$WTOOL_ARTIFACTS` 拿到清单文件路径，往里追加
 `kind<TAB>相对$HOME的路径<TAB>来源<TAB>时间`。
 
+### 3.1 产物必须落在 `$WTOOL_PREFIX` 下面（2026-09-17 补记）
+
+**这条原来漏写了，后果是 astronvim_v5 装完撤不回来。**
+
+引擎给出 `WTOOL_PREFIX`（默认 `$HOME/.wtool/usr`，`wtool.sh:51`，
+并通过 `wt_run_project_script` 导出给项目脚本）。契约是：
+
+> 项目脚本把**自己产出的东西**装进 `$WTOOL_PREFIX`。
+> `$HOME` 里只允许出现 **wtool 管的软链**（在 `~/.wtool/links/` 下）
+> 和**那一个 rc loader 块**。
+
+为什么必须这样：
+
+- **可撤销**：卸载 = 删 `~/.wtool/`，不用去猜"这个项目往 $HOME 撒了什么"
+- **不打架**：`~/.local/bin`、`~/.config` 是用户和别的工具共用的地方，
+  往里倒东西就是在制造"谁装的、能不能删"的糊涂账
+- **journal 才有意义**：journal 记的是"该撤销什么"，而撤销的目标必须
+  是 wtool 自己拥有的路径
+
+**反面教材（真实发生过）**：`astronvim_v5/scripts/install.sh` 写的是
+`PREFIX=${PREFIX:-$HOME_DIR/.local}`，完全无视 `WTOOL_PREFIX`，
+于是往 `~/.local/bin/nvim`、`~/.config/astronvim_v5`、
+`~/.local/share/astronvim_v5` 里倒。结果：
+
+- `~/.wtool/usr` 是空的 → `wtool uninstall` 撤不掉
+- env 块只写了 `NVIM_APPNAME`、**没写 PATH** → 新开的 shell 找不到 nvim
+- 用户 `$HOME` 被污染，且没有任何一条记录说这些东西是谁放的
+
+**新项目上手时先检查这一条**，它比 build/download 同路径更容易漏，
+因为漏了以后 install 看起来是成功的。
+
 ## 环境变量汇总（rc 收敛）
 
 用户 rc 里**只有一段** loader 块，指向 `~/.wtool/.zshrc` / `~/.wtool/.bashrc`；
