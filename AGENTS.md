@@ -55,15 +55,18 @@
 
 ```bash
 cd bootstrap/tests && ./run_all.sh          # 5 组，146 条，应该全绿
-cd editor/astronvim_v5 && ./tests/astronvim_test.sh   # 45 条
+cd editor/astronvim_v5 && ./tests/astronvim_test.sh   # 52 条
 ```
 
-**容器相关的测试只能人工跑**（这个环境跑不了 docker 里那套完整流程时，
-至少要人工确认 `container-shell.sh` 没被改坏）：
+**容器相关的测试只能人工跑**（跑不了 docker 里那套完整流程时，
+至少要人工确认两个容器脚本没被改坏）：
 
 ```bash
-docker run --rm -it \
-  -v ~/self/wtool:/wtool:ro \
+# 从零走一遍（什么都不装）
+docker run --rm -it --network=host -v ~/self/wtool:/wtool:ro \
+  ubuntu:24.04 bash /wtool/bootstrap/scripts/container-raw.sh
+# 一步到位（装依赖 + 引擎 + bootstrap）
+docker run --rm -it --network=host -v ~/self/wtool:/wtool:ro \
   -v wtool-apt-cache:/var/cache/apt \
   ubuntu:24.04 bash /wtool/bootstrap/scripts/container-shell.sh
 ```
@@ -88,6 +91,85 @@ docker run --rm -it \
 
 ---
 
+## 脚本地图：哪个脚本是谁调用的
+
+同名 `.sh` 很多，**改之前先确认它在哪一层**——改错层会"看起来生效了"但实际没跑。
+
+### 第一层：工作区根目录（都是 linkfile 软链）
+
+| 根目录 | 指向 | 作用 |
+|---|---|---|
+| `install.sh` | `bootstrap/scripts/install.sh` | 装 wtool **自己**（自举 `~/.wtool/bootstrap` + 建工作区入口）。**不装任何项目** |
+| `uninstall.sh` | `bootstrap/scripts/uninstall.sh` | 卸 wtool 自己 |
+| `README.md` / `guide.md` | `wtool-base/` | 用户文档 |
+
+**根目录的 `install.sh` 和项目的 `scripts/install.sh` 是两码事**，
+这个混淆已经害过一次（改项目脚本时以为在改引擎）。
+
+### 第二层：引擎
+
+| 文件 | 约束 |
+|---|---|
+| `bootstrap/wtool.sh` | 命令分发 + 所有"写"的动作 |
+| `bootstrap/lib/wtool_plan.py` | **只算不写**（除 scratch）：扫项目、算计划、画表、算 env |
+| `bootstrap/lib/wtool_fs.sh` | **只写不算**（除读 journal）：落盘、记账、链接、rc |
+| `bootstrap/lib/wtool_os.sh` | 系统探测 / provision |
+
+分成两半是有意的：计划能在动手之前完整算出来，`--dry-run` 才有意义。
+**新增动作要同时改两边**（py 出计划、sh 执行），只改一边的表现是
+动作被静默丢弃。
+
+### 第三层：项目自己的 `scripts/`
+
+| 文件 | 被谁调用 | 契约 |
+|---|---|---|
+| `build.sh` | `wtool build` | 产物落到最终位置 + 写 `$WTOOL_ARTIFACTS` |
+| `download.sh` | `wtool download` | **和 build.sh 落到完全相同的路径** |
+| `install.sh` | `wtool install`（引擎铺完 link/rc 之后） | 登记、软链、shell 集成 |
+| `install.sh --uninstall` | `wtool uninstall`（**逆放 journal 之前**） | 撤掉自己装的实体 |
+| `publish.sh` | `wtool publish` | 构建 + 打包 + 上传 |
+| `extract.sh` | 手动（只有浏览器的机器） | 校验分卷、铺到 `$HOME`，**不装** |
+
+**文件存在即能力声明**：`wtool_plan.py` 就是按 `scripts/<名字>` 在不在
+来填表格那几列的。所以"新建一个空的 build.sh"会立刻让表格显示"可执行"。
+
+### 容器脚本（两个，别搞混）
+
+| 脚本 | 状态 |
+|---|---|
+| `container-shell.sh` | 装依赖 → 装引擎 → `wtool bootstrap` → 进 zsh。**一步到位** |
+| `container-raw.sh` | **什么都不装**，只挂工作区 → 进 bash。等价于"刚 `repo sync` 完" |
+
+`container-raw.sh` 刻意不装 python3 —— 装了 `wtool` 就能跑，
+而真机器刚同步完时本来就没有。**测试"从零走一遍"必须用这个**，
+用 `container-shell.sh` 测会把要验证的前提条件提前满足掉。
+
+两者都只做一件预设：`git config --global --add safe.directory '*'`
+（容器里是 root、仓库属主是宿主用户，不配 git 直接拒绝工作）。
+
+---
+
+## 项目脚本的三条硬契约
+
+改任何 `scripts/*.sh` 之前先过一遍这个清单。**三条都踩过。**
+
+1. **产物落在 `$WTOOL_PREFIX`（默认 `~/.wtool/usr`）下面。**
+   不是 `~/.local`。引擎通过 `wt_run_project_script` 导出这个变量。
+   `$HOME` 里只允许留**软链**（登记进清单，可撤销）。
+   违反的后果：`wtool uninstall` 撤不掉（实测 plan 出 `actions: 0`），
+   `$HOME` 被污染且没人知道是谁放的。astronvim_v5 犯过，
+   详见 `notes/01-context.md` §3.1。
+
+2. **`build.sh` 和 `download.sh` 必须产出完全相同的路径。**
+   这是 `build+install` 与 `download+install` 等价的前提。
+
+3. **shell 集成要靠"环境变量块"，而且要带全。**
+   最容易漏的是 `PATH` —— 只写 `NVIM_APPNAME` 那种，表现为
+   "装完了但敲命令是 command not found"，而 `~/.config` 里又看得到东西，
+   看起来像装了一半。**$WTOOL_PREFIX/bin 一定要进 PATH。**
+
+---
+
 ## 代理（这台机器）
 
 宿主代理是 `http://127.0.0.1:7897`。
@@ -97,3 +179,11 @@ docker run --rm -it \
 - `archive.ubuntu.com` / `security.ubuntu.com` 走这个代理**经常 502**。
   容器里装包失败先换国内镜像（`mirrors.ustc.edu.cn`）
 - GitHub 的 `git clone` 走这个代理会偶发 TLS 中断，重试或改用 tarball
+- **代理对 GitHub 有时是坏的，而直连是好的**（实测直连 `api.github.com` 200/0.4s，
+  走代理 `SSL_ERROR_SYSCALL`）。所以下载/上传都写成"先按现状试、失败后绕开代理"
+- **`github.com` 这个域名可能整个不通，而 `api.github.com` 通**。
+  release 资产的常规 URL 第一步就要访问 `github.com` 拿 302，会永远卡住。
+  绕开的办法是走 API 的资产端点（`Accept: application/octet-stream`），
+  它跳到 `release-assets.githubusercontent.com`。`download.sh` 就是这么做的
+- **代理坏掉时的表现是"慢慢磨"而不是立刻报错**，所以要**先探一次**
+  （`gh api /rate_limit` 或一次小请求），别拿几百 MB 去赌
