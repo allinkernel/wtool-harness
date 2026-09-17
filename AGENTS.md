@@ -213,11 +213,22 @@ docker run --rm -it --network=host -v ~/self/wtool:/wtool:ro \
 - `archive.ubuntu.com` / `security.ubuntu.com` 走这个代理**经常 502**。
   容器里装包失败先换国内镜像（`mirrors.ustc.edu.cn`）
 - GitHub 的 `git clone` 走这个代理会偶发 TLS 中断，重试或改用 tarball
-- **代理对 GitHub 有时是坏的，而直连是好的**（实测直连 `api.github.com` 200/0.4s，
-  走代理 `SSL_ERROR_SYSCALL`）。所以下载/上传都写成"先按现状试、失败后绕开代理"
-- **`github.com` 这个域名可能整个不通，而 `api.github.com` 通**。
-  release 资产的常规 URL 第一步就要访问 `github.com` 拿 302，会永远卡住。
+- **`docker run` 不会把宿主的代理变量带进容器**（除非显式 `-e`），
+  所以容器里默认是"裸网"：宿主 `curl` 什么都通，容器里全失败。
+  人很容易把它归因成"网络坏了"去查错方向。
+  `container-proxy.sh` 会探测并自动接上宿主代理（依赖 `--network=host`，
+  那时容器里的 `127.0.0.1` 才是宿主自己）
+- **代理偶尔会抖，表现是"慢慢磨"而不是立刻报错**，所以要**先探一次**
+  （`gh api /rate_limit` 或一次小请求），别拿几百 MB 去赌。
+  下载/上传都写成"两条路都试过才算失败"
+- **`github.com` 这个域名有时整个不通，而 `api.github.com` 通**。
+  release 资产的常规 URL 第一步就要访问 `github.com` 拿 302，会一直卡住。
   绕开的办法是走 API 的资产端点（`Accept: application/octet-stream`），
   它跳到 `release-assets.githubusercontent.com`。`download.sh` 就是这么做的
-- **代理坏掉时的表现是"慢慢磨"而不是立刻报错**，所以要**先探一次**
-  （`gh api /rate_limit` 或一次小请求），别拿几百 MB 去赌
+
+> **别把上面几条读成"代理不能用"。** 我一度这么写过 —— 当时量到一次
+> `SSL_ERROR_SYSCALL` 就下了结论，后来复测代理完全正常
+> （`api.github.com` 200/1.1s、`github.com` 200/2.8s、`uploads` 302）。
+> 那是**一次临时故障**，我过度概括成了规律，还写进了注释和文档。
+> 教训：一次失败只证明"这次失败了"，不证明"这条路不行"。
+> 要下"哪条路更好"的结论，至少隔一段时间复测几次。
